@@ -1,0 +1,404 @@
+; =================================================================
+; APP 0: HELP (Документация)
+; =================================================================
+draw_help:
+    call clear_workspace
+    mov dh, 2
+    mov dl, 4
+    mov ah, 0x1E        ; Желтый текст
+    mov si, h_t
+    call print_string_at
+
+    mov dh, 4
+    mov dl, 4
+    mov ah, 0x1F        ; Белый текст
+    mov si, h_1
+    call print_string_at
+
+    mov dh, 5
+    mov dl, 4
+    mov ah, 0x1F
+    mov si, h_2
+    call print_string_at
+
+    mov dh, 7
+    mov dl, 4
+    mov ah, 0x1A        ; Зеленый текст
+    mov si, h_3
+    call print_string_at
+    ret
+
+app_help_key:
+    ret
+
+h_t db '=== AetherOS Command Center ===', 0
+h_1 db 'F1-F4: Switch active applications instantly.', 0
+h_2 db 'F2 (Files): Use UP/DOWN arrows to select target file.', 0
+h_3 db 'System Core running optimally in Ring-0.', 0
+
+; =================================================================
+; APP 1: FILE MANAGER (Работа с файлами)
+; =================================================================
+draw_files:
+    call clear_workspace
+    mov dh, 2
+    mov dl, 4
+    mov ah, 0x1A
+    mov si, f_t
+    call print_string_at
+
+    xor cx, cx
+.loop:
+    push cx
+    mov ax, cx
+    mov bx, FileEntry_size
+    mul bx
+    mov bx, ax
+
+    ; Проверка на выделенный файл
+    pop cx
+    push cx
+    mov ah, 0x1F        ; Стандартный цвет
+    cmp cl, [SELECTED_FILE]
+    jne .print
+    mov ah, 0x70        ; Цвет выделения (инверсия)
+
+.print:
+    pop cx
+    push cx
+    mov dh, cl
+    add dh, 4           ; Отступ сверху
+    mov dl, 6
+    lea si, [file_table + bx + FileEntry.name]
+    call print_string_at
+
+    pop cx
+    inc cx
+    cmp cx, MAX_FILES
+    jl .loop
+    ret
+
+app_file_key:
+    cmp ah, 0x48        ; Arrow Up
+    je .up
+    cmp ah, 0x50        ; Arrow Down
+    je .down
+    ret
+.up:
+    cmp byte [SELECTED_FILE], 0
+    jle .done
+    dec byte [SELECTED_FILE]
+    ret
+.down:
+    cmp byte [SELECTED_FILE], MAX_FILES - 1
+    jge .done
+    inc byte [SELECTED_FILE]
+.done:
+    ret
+
+f_t db '=== Storage & File System ===', 0
+
+; =================================================================
+; APP 2: TEXT EDITOR (Текстовый редактор)
+; =================================================================
+draw_editor:
+    call clear_workspace
+    mov dh, 2
+    mov dl, 4
+    mov ah, 0x1C        ; Красный заголовок
+    mov si, e_t
+    call print_string_at
+
+    ; Вывод имени текущего файла
+    mov al, [SELECTED_FILE]
+    xor ah, ah
+    mov bx, FileEntry_size
+    mul bx
+    mov bx, ax
+
+    mov dh, 2
+    mov dl, 25
+    mov ah, 0x1E
+    lea si, [file_table + bx + FileEntry.name]
+    call print_string_at
+
+    ; Отрисовка текста внутри файла (линейно)
+    mov di, (80 * 4 + 4) * 2  ; Начало текста: строка 4, колонка 4
+    mov cx, [file_table + bx + FileEntry.size]
+    cmp cx, 0
+    je .draw_cursor
+
+    lea si, [file_table + bx + FileEntry.data]
+    mov ah, 0x1F        ; Цвет текста в редакторе
+    push es
+    mov dx, 0xB800
+    mov es, dx
+.pchar:
+    lodsb
+    mov [es:di], al
+    mov [es:di+1], ah
+    add di, 2
+    loop .pchar
+    pop es
+
+.draw_cursor:
+    ; Отрисовка блочного курсора в конце текста
+    push es
+    mov dx, 0xB800
+    mov es, dx
+    mov byte [es:di], 0xDB    ; Спецсимвол полного блока
+    mov byte [es:di+1], 0x1E  ; Желтый цвет курсора
+    pop es
+    ret
+
+app_editor_key:
+    cmp al, 8           ; Backspace
+    je .bspace
+    cmp al, 32
+    jl .done            ; Игнор других спецсимволов
+    cmp al, 126
+    jg .done
+
+    ; Добавление символа
+    push ax
+    mov al, [SELECTED_FILE]
+    xor ah, ah
+    mov bx, FileEntry_size
+    mul bx
+    mov bx, ax
+    pop ax
+
+    mov di, [file_table + bx + FileEntry.size]
+    cmp di, FILE_SIZE - 1
+    jge .done           ; Файл переполнен
+
+    lea si, [file_table + bx + FileEntry.data]
+    add si, di
+    mov [si], al
+    inc word [file_table + bx + FileEntry.size]
+    ret
+
+.bspace:
+    mov al, [SELECTED_FILE]
+    xor ah, ah
+    mov bx, FileEntry_size
+    mul bx
+    mov bx, ax
+
+    mov di, [file_table + bx + FileEntry.size]
+    cmp di, 0
+    je .done
+    dec word [file_table + bx + FileEntry.size]
+    
+    ; Затираем нулем
+    lea si, [file_table + bx + FileEntry.data]
+    add si, di
+    dec si
+    mov byte [si], 0
+.done:
+    ret
+
+e_t db '=== Text Editor === [', 0
+
+; =================================================================
+; APP 3: MicroBASIC TERMINAL (Терминал и Язык)
+; =================================================================
+term_buf times 64 db 0
+term_len dw 0
+term_out times 128 db 0
+
+draw_terminal:
+    call clear_workspace
+    mov dh, 2
+    mov dl, 4
+    mov ah, 0x1A
+    mov si, t_t
+    call print_string_at
+
+    ; Вывод лога (результата прошлой команды)
+    mov dh, 5
+    mov dl, 4
+    mov ah, 0x17        ; Серый на синем
+    mov si, term_out
+    call print_string_at
+
+    ; Вывод промпта (строки ввода)
+    mov dh, 20
+    mov dl, 4
+    mov ah, 0x1A
+    mov si, t_p
+    call print_string_at
+
+    ; Вывод введенного в буфер текста
+    mov dh, 20
+    mov dl, 6
+    mov ah, 0x1F
+    mov si, term_buf
+    call print_string_at
+
+    ; Курсор командной строки
+    mov ax, 80 * 20 + 6
+    add ax, [term_len]
+    shl ax, 1
+    mov di, ax
+    push es
+    mov dx, 0xB800
+    mov es, dx
+    mov byte [es:di], 0xDC    ; Символ нижнего подчеркивания
+    mov byte [es:di+1], 0x1A
+    pop es
+    ret
+
+app_term_key:
+    cmp al, 13          ; Enter
+    je .exec
+    cmp al, 8           ; Backspace
+    je .bspace
+    cmp al, 32
+    jl .done
+    cmp al, 126
+    jg .done
+
+    mov bx, [term_len]
+    cmp bx, 60
+    jge .done
+    mov [term_buf + bx], al
+    inc word [term_len]
+    mov byte [term_buf + bx + 1], 0  ; Null-терминатор
+    ret
+
+.bspace:
+    mov bx, [term_len]
+    cmp bx, 0
+    je .done
+    dec word [term_len]
+    mov bx, [term_len]
+    mov byte [term_buf + bx], 0
+    ret
+
+.exec:
+    call exec_basic
+    mov word [term_len], 0
+    mov byte [term_buf], 0
+    ret
+.done:
+    ret
+
+t_t db '=== MicroBASIC Terminal ===', 0
+t_p db '>', 0
+
+; --- Парсер встроенного языка ---
+strcmp_prefix:
+    ; Сравнивает начало строки в SI с шаблоном в DI
+    push di
+    push ax
+    push bx
+.loop:
+    mov al, [di]
+    cmp al, 0
+    je .skip_spaces     ; Шаблон закончился, значит совпало
+    mov bl, [si]
+    cmp al, bl
+    jne .fail           ; Не совпало
+    inc si
+    inc di
+    jmp .loop
+.skip_spaces:
+    cmp byte [si], ' '
+    jne .fin
+    inc si
+    jmp .skip_spaces
+.fin:
+    pop bx
+    pop ax
+    pop di
+    stc                 ; Carry Flag = 1 (Успех)
+    ret
+.fail:
+    pop bx
+    pop ax
+    pop di
+    clc                 ; Carry Flag = 0 (Провал)
+    ret
+
+exec_basic:
+    mov si, term_buf
+    cmp byte [si], 0
+    je .ret
+
+    ; Проверка команды PRINT
+    mov di, c_print
+    call strcmp_prefix
+    jc .do_print
+
+    ; Проверка команды CLS
+    mov di, c_clear
+    call strcmp_prefix
+    jc .do_clear
+
+    ; Проверка команды RUN (Запускает выделенный файл как скрипт)
+    mov di, c_run
+    call strcmp_prefix
+    jc .do_run
+
+    ; Проверка команды HELP
+    mov di, c_help
+    call strcmp_prefix
+    jc .do_help
+
+    ; Если ничего не совпало - ошибка
+    mov si, e_unk
+    call set_out
+    ret
+
+.do_print:
+    call set_out
+    ret
+
+.do_clear:
+    mov byte [term_out], 0
+    ret
+
+.do_help:
+    mov si, m_hlp
+    call set_out
+    ret
+
+.do_run:
+    ; Запуск скрипта из текущего файла
+    mov al, [SELECTED_FILE]
+    xor ah, ah
+    mov bx, FileEntry_size
+    mul bx
+    mov bx, ax
+    lea si, [file_table + bx + FileEntry.data]
+
+    ; Ищем в скрипте известные команды (пока поддерживаем только PRINT из файла)
+    mov di, c_print
+    call strcmp_prefix
+    jc .do_print
+    
+    ; Если в файле неизвестный синтаксис
+    mov si, e_scr
+    call set_out
+.ret:
+    ret
+
+set_out:
+    ; Копирует результат в буфер вывода терминала
+    mov di, term_out
+.cpy:
+    lodsb
+    stosb
+    cmp al, 0
+    jne .cpy
+    ret
+
+; Словари команд и ошибок терминала
+c_print db 'PRINT', 0
+c_clear db 'CLS', 0
+c_run   db 'RUN', 0
+c_help  db 'HELP', 0
+e_unk   db 'Syntax Error: Unknown Command', 0
+e_scr   db 'Script Error: Missing or invalid command in file', 0
+m_hlp   db 'Commands: PRINT <text>, CLS, RUN, HELP', 0
