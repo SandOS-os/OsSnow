@@ -1,0 +1,44 @@
+; ==========================================
+; AetherFS - In-Memory File System
+; ==========================================
+
+MAX_FILES equ 8
+FILE_SIZE equ 498
+FileEntry_size equ 512
+
+; Структура файловой записи (Ровно 512 байт: 12 + 2 + 498)
+struc FileEntry
+    .name resb 12
+    .size dw 1
+    .data resb FILE_SIZE
+endstruc
+
+file_table: times MAX_FILES * FileEntry_size db 0
+
+init_fs:
+    pusha
+    ; Создаем первый файл: Скрипт (script.bas)
+    mov bx, 0
+    mov si, fn_1
+    lea di, [file_table + bx + FileEntry.name]
+    mov cx, 11
+    rep movsb
+    mov word [file_table + bx + FileEntry.size], 22
+    mov si, fc_1
+    lea di, [file_table + bx + FileEntry.data]
+    mov cx, 22
+    rep movsb
+
+    ; Создаем второй файл: Заметки (notes.txt)
+    mov bx, FileEntry_size
+    mov si, fn_2
+    lea di, [file_table + bx + FileEntry.name]
+    mov cx, 10
+    rep movsb
+    mov word [file_table + bx + FileEntry.size], 0
+    popa
+    ret
+
+fn_1 db 'script.bas', 0
+fc_1 db 'PRINT Hello from code!', 0
+fn_2 db 'notes.txt', 0
