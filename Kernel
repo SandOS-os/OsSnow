@@ -1,0 +1,166 @@
+[BITS 16]
+[ORG 0x0000]
+
+jmp kernel_main
+
+; --- Добавлены макросы NASM ДО подгрузки остальных файлов ---
+%macro draw_rect_macro 5
+    push word %5    ; color
+    push word %1    ; x
+    push word %2    ; y
+    push word %3    ; width
+    push word %4    ; height
+    call draw_rectangle
+%endmacro
+
+%macro print_text_macro 4
+    mov ah, 0x02
+    mov bh, 0
+    mov dh, %2      ; row/y
+    mov dl, %1      ; col/x
+    int 0x10
+    mov si, %3
+    call print_string_gfx
+%endmacro
+
+%include "fs.asm"
+%include "shell.asm"
+
+COLOR_BG        equ 0x18
+COLOR_PANEL     equ 0x13
+COLOR_ACTIVE    equ 0x2A
+COLOR_TEXT      equ 0x0F
+COLOR_HEADER    equ 0x01
+
+CURRENT_FOCUS   db 0
+SELECTED_FILE   db 0
+
+msg_topbar db 'AetherOS v1.0 | [Left/Right] App | [Up/Down] Select | [Enter] Exec', 0
+msg_botbar db 'F1: File System | F2: Text Editor | F3: MicroBASIC | F4: Diagnostic', 0
+
+kernel_main:
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+
+    call init_filesystem
+
+    mov ax, 0x0013
+    int 0x10
+
+main_loop:
+    call draw_desktop
+    call draw_active_app
+    call handle_input
+    jmp main_loop
+
+draw_desktop:
+    mov ax, 0xA000
+    mov es, ax
+    xor di, di
+    mov al, COLOR_BG
+    mov cx, 320*200
+    rep stosb
+
+    draw_rect_macro 0, 0, 320, 12, COLOR_HEADER
+    print_text_macro 1, 0, msg_topbar, 15
+
+    draw_rect_macro 0, 188, 320, 12, COLOR_PANEL
+    print_text_macro 1, 23, msg_botbar, 0
+    ret
+
+handle_input:
+    mov ah, 0x00
+    int 0x16
+
+    cmp ah, 0x4B
+    je .prev_app
+    cmp ah, 0x4D
+    je .next_app
+    cmp ah, 0x48
+    je .up_action
+    cmp ah, 0x50
+    je .down_action
+    cmp ah, 0x1C
+    je .enter_action
+    
+    call process_app_key
+    ret
+
+.prev_app:
+    dec byte [CURRENT_FOCUS]
+    jns .done_app
+    mov byte [CURRENT_FOCUS], 3
+.done_app:
+    ret
+
+.next_app:
+    inc byte [CURRENT_FOCUS]
+    cmp byte [CURRENT_FOCUS], 4
+    jl .done_app2
+    mov byte [CURRENT_FOCUS], 0
+.done_app2:
+    ret
+
+.up_action:
+    cmp byte [SELECTED_FILE], 0
+    jle .ret_u
+    dec byte [SELECTED_FILE]
+.ret_u:
+    ret
+
+.down_action:
+    inc byte [SELECTED_FILE]
+    cmp byte [SELECTED_FILE], 7
+    jl .ret_d
+    mov byte [SELECTED_FILE], 7
+.ret_d:
+    ret
+
+.enter_action:
+    call execute_current_action
+    ret
+
+draw_rectangle:
+    push bp         ; Сохраняем указатель кадра стека
+    mov bp, sp
+    pusha
+
+    mov ax, 0xA000
+    mov es, ax
+    
+    mov ax, [bp+6]   ; Y
+    mov dx, 320
+    mul dx
+    add ax, [bp+8]   ; X
+    mov di, ax
+
+    mov dx, [bp+4]   ; Height
+.row_loop:
+    mov cx, [bp+2]   ; Width
+    mov al, [bp+10]  ; Color
+    push di
+    rep stosb
+    pop di
+    add di, 320
+    dec dx
+    jnz .row_loop
+
+    popa
+    pop bp
+    ret 8
+
+print_string_gfx:
+    pusha
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+    mov ah, 0x0E
+    mov bh, 0
+    mov bl, COLOR_TEXT
+    int 0x10
+    jmp .loop
+.done:
+    popa
+    ret
