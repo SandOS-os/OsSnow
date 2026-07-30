@@ -1,0 +1,42 @@
+; ==========================================
+; AetherFS - In-Memory File System (Fixed)
+; ==========================================
+
+MAX_FILES      equ 8
+FILE_SIZE      equ 498
+FileEntry_size equ 512
+
+; Смещения структуры
+OFF_NAME dw 0
+OFF_SIZE dw 12
+OFF_DATA dw 14
+
+file_table: times MAX_FILES * FileEntry_size db 0
+
+init_fs:
+    pusha
+    ; Создаем первый файл: Скрипт (script.bas)
+    mov bx, 0
+    mov si, fn_1
+    lea di, [file_table + bx]
+    mov cx, 11
+    rep movsb
+    mov word [file_table + bx + 12], 22
+    mov si, fc_1
+    lea di, [file_table + bx + 14]
+    mov cx, 22
+    rep movsb
+
+    ; Создаем второй файл: Заметки (notes.txt)
+    mov bx, FileEntry_size
+    mov si, fn_2
+    lea di, [file_table + bx]
+    mov cx, 10
+    rep movsb
+    mov word [file_table + bx + 12], 0
+    popa
+    ret
+
+fn_1 db 'script.bas', 0
+fc_1 db 'PRINT Hello from code!', 0
+fn_2 db 'notes.txt', 0
