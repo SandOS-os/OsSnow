@@ -1,0 +1,23 @@
+#!/bin/bash
+
+echo "=== Compiling AetherOS ==="
+
+# 1. Компилируем загрузочный сектор
+nasm -f bin boot.asm -o boot.bin
+
+# 2. Компилируем ядро
+nasm -f bin kernel.asm -o kernel.bin
+
+# 3. Создаем образ диска 1.44 Мб (заполнен нулями)
+dd if=/dev/zero of=os.img bs=512 count=2880
+
+# 4. Записываем загрузчик в 1-й сектор
+dd if=boot.bin of=os.img conv=notrunc bs=512 seek=0 count=1
+
+# 5. Записываем ядро со 2-го сектора
+dd if=kernel.bin of=os.img conv=notrunc bs=512 seek=1
+
+echo "=== Build Complete! Launching QEMU... ==="
+
+# 6. Запуск в QEMU с эмуляцией слабого процессора
+qemu-system-i386 -fda os.img -m 16 -cpu core2duo
