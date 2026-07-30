@@ -1,0 +1,160 @@
+[BITS 16]
+[ORG 0x0000]
+
+jmp kernel_main
+
+%include "fs.asm"
+%include "shell.asm"
+
+; Глобальные переменные состояния ОС
+CURRENT_APP   db 0   ; 0=Help, 1=Files, 2=Editor, 3=Terminal
+SELECTED_FILE db 0   ; Индекс выбранного файла (0-7)
+
+kernel_main:
+    ; 1. Настройка сегментов
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+
+    ; 2. Инициализация файловой системы
+    call init_fs
+
+    ; 3. Включение текстового режима 80x25 (Mode 0x03)
+    mov ax, 0x0003
+    int 0x10
+
+    ; 4. Отключение аппаратного мигающего курсора BIOS
+    mov ah, 0x01
+    mov cx, 0x2000
+    int 0x10
+
+    ; Первичная отрисовка
+    call draw_ui
+
+main_loop:
+    call handle_input
+    call draw_ui
+    jmp main_loop
+
+; --- Графические утилиты текстового режима ---
+
+print_string_at:
+    ; Вход: DH = строка (0-24), DL = столбец (0-79), AH = цвет, DS:SI = строка
+    pusha
+    mov al, dh
+    mov bl, 80
+    mul bl
+    xor dh, dh
+    add ax, dx
+    shl ax, 1           ; Умножаем на 2 (символ + атрибут)
+    mov di, ax
+    mov bx, 0xB800
+    mov es, bx
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+    mov [es:di], al
+    mov [es:di+1], ah
+    add di, 2
+    jmp .loop
+.done:
+    popa
+    ret
+
+clear_workspace:
+    ; Очищает рабочую область (строки 1-23), оставляя бары
+    pusha
+    mov ax, 0xB800
+    mov es, ax
+    mov di, 80*2        ; Старт со 2-й строки (смещение в байтах)
+    mov cx, 80*23       ; 23 строки по 80 символов
+    mov ax, 0x1F20      ; 0x1F = Белый на синем, 0x20 = пробел
+    rep stosw
+    popa
+    ret
+
+draw_ui:
+    ; --- Отрисовка верхней панели ---
+    pusha
+    mov ax, 0xB800
+    mov es, ax
+    xor di, di
+    mov cx, 80
+    mov ax, 0x7020      ; Черный текст на сером фоне
+    rep stosw
+    popa
+    
+    mov dh, 0
+    mov dl, 2
+    mov ah, 0x70
+    mov si, msg_topbar
+    call print_string_at
+
+    ; --- Отрисовка нижней панели (горячие клавиши) ---
+    pusha
+    mov ax, 0xB800
+    mov es, ax
+    mov di, 80*24*2
+    mov cx, 80
+    mov ax, 0x7020
+    rep stosw
+    popa
+    
+    mov dh, 24
+    mov dl, 2
+    mov ah, 0x70
+    mov si, msg_botbar
+    call print_string_at
+
+    ; --- Вызов отрисовки активного приложения ---
+    mov al, [CURRENT_APP]
+    cmp al, 0
+    je .app_0
+    cmp al, 1
+    je .app_1
+    cmp al, 2
+    je .app_2
+    cmp al, 3
+    je .app_3
+    ret
+
+.app_0: call draw_help; ret
+.app_1: call draw_files; ret
+.app_2: call draw_editor; ret
+.app_3: call draw_terminal; ret
+
+handle_input:
+    mov ah, 0x00
+    int 0x16
+
+    ; Глобальные хоткеи (Скан-коды F1 - F4)
+    cmp ah, 0x3B ; F1
+    je .set_0
+    cmp ah, 0x3C ; F2
+    je .set_1
+    cmp ah, 0x3D ; F3
+    je .set_2
+    cmp ah, 0x3E ; F4
+    je .set_3
+
+    ; Перенаправление клавиш в текущее приложение
+    mov bl, [CURRENT_APP]
+    cmp bl, 0
+    je app_help_key
+    cmp bl, 1
+    je app_file_key
+    cmp bl, 2
+    je app_editor_key
+    cmp bl, 3
+    je app_term_key
+    ret
+
+.set_0: mov byte [CURRENT_APP], 0; ret
+.set_1: mov byte [CURRENT_APP], 1; ret
+.set_2: mov byte [CURRENT_APP], 2; ret
+.set_3: mov byte [CURRENT_APP], 3; ret
+
+; Константы UI
+msg_topbar db 'AetherOS | Workspace Environment', 0
+msg_botbar db '[F1] Help   [F2] Files   [F3] Editor   [F4] Terminal', 0
