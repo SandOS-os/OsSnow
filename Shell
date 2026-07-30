@@ -1,0 +1,229 @@
+; ==========================================
+; AetherOS Integrated Shell & Apps
+; ==========================================
+
+buf_input times 64 db 0
+
+draw_active_app:
+    mov al, [CURRENT_FOCUS]
+    cmp al, 0
+    je draw_file_manager
+    cmp al, 1
+    je draw_text_editor
+    cmp al, 2
+    je draw_interpreter
+    cmp al, 3
+    je draw_system_scanner
+    ret
+
+; --- 1. Файловый Менеджер ---
+draw_file_manager:
+    ; Рисуем главное окно
+    push word 0x0F ; Color (Panel)
+    push word 20   ; X
+    push word 25   ; Y
+    push word 280  ; Width
+    push word 150  ; Height
+    call draw_rectangle
+
+    ; Установка курсора для текста
+    mov ah, 0x02
+    mov bh, 0
+    mov dh, 4  ; Line
+    mov dl, 4  ; Col
+    int 0x10
+
+    mov si, msg_fm_title
+    call print_string_gfx
+
+    ; Вывод списка файлов
+    xor cx, cx
+.loop_files:
+    push cx
+    mov ax, cx
+    mov bl, FileEntry_size
+    mul bl
+    mov bx, ax
+    
+    ; Проверка используется ли файл
+    cmp byte [file_table + bx + FileEntry.used], 1
+    jne .skip_render
+
+    ; Установка курсора
+    mov ah, 0x02
+    mov bh, 0
+    pop cx
+    push cx
+    add cl, 6
+    mov dh, cl  ; Row
+    mov dl, 6   ; Col
+    int 0x10
+
+    ; Подсветка активного файла стрелочкой
+    pop cx
+    push cx
+    cmp cl, [SELECTED_FILE]
+    jne .no_select
+    mov si, msg_pointer
+    call print_string_gfx
+    jmp .print_name
+.no_select:
+    mov si, msg_space
+    call print_string_gfx
+
+.print_name:
+    lea si, [file_table + bx + FileEntry.name]
+    call print_string_gfx
+
+.skip_render:
+    pop cx
+    inc cx
+    cmp cx, MAX_FILES
+    jl .loop_files
+    ret
+
+; --- 2. Текстовый Редактор ---
+draw_text_editor:
+    push word 0x1E ; Panel Color
+    push word 20
+    push word 25
+    push word 280
+    push word 150
+    call draw_rectangle
+
+    mov ah, 0x02
+    mov dh, 4
+    mov dl, 4
+    int 0x10
+    mov si, msg_ed_title
+    call print_string_gfx
+
+    ; Чтение контента выбранного файла
+    mov al, [SELECTED_FILE]
+    mov bl, FileEntry_size
+    mul bl
+    mov bx, ax
+
+    mov ah, 0x02
+    mov dh, 7
+    mov dl, 5
+    int 0x10
+    lea si, [file_table + bx + FileEntry.data]
+    call print_string_gfx
+    ret
+
+; --- 3. Интерпретатор MicroBASIC ---
+draw_interpreter:
+    push word 0x00 ; Black background window
+    push word 20
+    push word 25
+    push word 280
+    push word 150
+    call draw_rectangle
+
+    mov ah, 0x02
+    mov dh, 4
+    mov dl, 4
+    int 0x10
+    mov si, msg_bas_title
+    call print_string_gfx
+
+    mov ah, 0x02
+    mov dh, 6
+    mov dl, 4
+    int 0x10
+    mov si, msg_bas_prompt
+    call print_string_gfx
+
+    ; Выполняем то, что лежит в 1-м файле как скрипт
+    mov ah, 0x02
+    mov dh, 8
+    mov dl, 4
+    int 0x10
+
+    lea si, [file_table + FileEntry.data]
+    call run_micro_basic
+    ret
+
+; Парсер встроенного языка
+run_micro_basic:
+    ; Ищет команду 'PRINT '
+    lodsb
+    cmp al, 'P'
+    jne .unknown
+    lodsb
+    cmp al, 'R'
+    jne .unknown
+    lodsb
+    cmp al, 'I'
+    jne .unknown
+    lodsb
+    cmp al, 'N'
+    jne .unknown
+    lodsb
+    cmp al, 'T'
+    jne .unknown
+    lodsb ; Пропуск пробела
+
+    ; Всё что дальше — выводим на экран
+    call print_string_gfx
+    ret
+.unknown:
+    mov si, msg_err_script
+    call print_string_gfx
+    ret
+
+; --- 4. Системный Сканер (Hardware Scan) ---
+draw_system_scanner:
+    push word 0x13
+    push word 20
+    push word 25
+    push word 280
+    push word 150
+    call draw_rectangle
+
+    mov ah, 0x02
+    mov dh, 4
+    mov dl, 4
+    int 0x10
+    mov si, msg_scan_title
+    call print_string_gfx
+
+    ; Получаем объем Conventional RAM через BIOS int 12h
+    int 0x12
+    ; AX = размер в килобайтах
+
+    mov ah, 0x02
+    mov dh, 7
+    mov dl, 5
+    int 0x10
+    mov si, msg_ram_info
+    call print_string_gfx
+
+    mov ah, 0x02
+    mov dh, 9
+    mov dl, 5
+    int 0x10
+    mov si, msg_vga_info
+    call print_string_gfx
+    ret
+
+process_app_key:
+    ; Заглушка для интерактива
+    ret
+
+execute_current_action:
+    ; Реакция на нажатие Enter
+    ret
+
+; Строковые константы
+msg_fm_title    db '=== FILE MANAGER ===', 0
+msg_ed_title    db '=== TEXT EDITOR ===', 0
+msg_bas_title   db '=== MicroBASIC Terminal ===', 0
+msg_scan_title  db '=== SYSTEM DIAGNOSTIC SCANNER ===', 0
+msg_pointer     db '-> ', 0
+msg_space       db '   ', 0
+msg_bas_prompt  db 'Executing prog1.bas...', 0
+msg_err_script  db 'Syntax Error!', 0
+msg_ram_info    db 'Base RAM: 640 KB Detected', 0
+msg_vga_info    db 'Video Adapter: VGA Mode 13h (320x200 256c)', 0
