@@ -1,0 +1,69 @@
+; ==========================================
+; AetherOS Bootloader (MBR Sector 1)
+; NASM Syntax (16-bit Real Mode)
+; ==========================================
+[BITS 16]
+[ORG 0x7C00]
+
+KERNEL_OFFSET equ 0x1000
+
+start:
+    cli                     ; Отключаем прерывания на время настройки стека
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7C00
+    sti
+
+    mov [BOOT_DRIVE], dl    ; Сохраняем номер загрузочного диска
+
+    ; Выводим сообщение о загрузке
+    mov si, msg_loading
+    call print_string
+
+    ; Загружаем ядро с диска (15 секторов)
+    mov bx, KERNEL_OFFSET
+    mov dh, 15              ; Количество секторов для чтения
+    mov dl, [BOOT_DRIVE]
+    call read_disk
+
+    ; Переходим к ядру
+    jmp KERNEL_OFFSET:0000
+
+print_string:
+    mov ah, 0x0E
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+    int 0x10
+    jmp .loop
+.done:
+    ret
+
+read_disk:
+    pusha
+    push dx
+    mov ah, 0x02
+    mov al, dh              ; Секторов читать
+    mov ch, 0x00            ; Цилиндр 0
+    mov dh, 0x00            ; Головка 0
+    mov cl, 0x02            ; Начинаем со 2-го сектора
+    int 0x13
+    jc disk_error
+    pop dx
+    popa
+    ret
+
+disk_error:
+    mov si, msg_error
+    call print_string
+    hlt
+
+BOOT_DRIVE db 0
+msg_loading db 'AetherOS Booting...', 0x0D, 0x0A, 0
+msg_error   db 'Disk Read Error!', 0
+
+times 510-($-$$) db 0
+dw 0xAA55                   ; Сигнатура MBR
