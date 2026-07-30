@@ -1,0 +1,85 @@
+; ==========================================
+; AetherOS Bootloader (MBR Sector 1)
+; NASM Syntax (16-bit Real Mode)
+; ==========================================
+[BITS 16]
+[ORG 0x7C00]
+
+KERNEL_SEGMENT equ 0x1000
+KERNEL_OFFSET  equ 0x0000
+
+start:
+    ; 1. Настройка сегментов и стека
+    cli                     ; Отключаем прерывания на время инициализации
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7C00
+    sti                     ; Включаем прерывания обратно
+
+    ; 2. Сохраняем номер загрузочного диска, переданный BIOS в DL
+    mov [BOOT_DRIVE], dl
+
+    ; 3. Выводим стартовое сообщение
+    mov si, msg_loading
+    call print_string
+
+    ; 4. Сброс дискового контроллера перед чтением
+    mov ah, 0x00
+    mov dl, [BOOT_DRIVE]
+    int 0x13
+    jc disk_error
+
+    ; 5. Настройка ES:BX для записи ядра по адресу 0x1000:0x0000
+    mov ax, KERNEL_SEGMENT
+    mov es, ax
+    mov bx, KERNEL_OFFSET
+
+    ; 6. Чтение ядра с диска (15 секторов, начиная со 2-го)
+    mov ah, 0x02            ; Функция чтения секторов
+    mov al, 15              ; Количество секторов для чтения
+    mov ch, 0x00            ; Цилиндр 0
+    mov dh, 0x00            ; Головка 0
+    mov cl, 0x02            ; Сектор 2 (сразу после MBR)
+    mov dl, [BOOT_DRIVE]    ; Номер диска
+    int 0x13
+    jc disk_error           ; Если флаг CF установлен — произошла ошибка
+
+    ; 7. Подготовка сегментных регистров перед передачей управления ядру
+    mov ax, KERNEL_SEGMENT
+    mov ds, ax
+    mov es, ax
+
+    ; 8. Переход на код ядра (Far Jump на 0x1000:0x0000)
+    jmp KERNEL_SEGMENT:KERNEL_OFFSET
+
+; --- Вспомогательные функции загрузчика ---
+
+print_string:
+    pusha
+    mov ah, 0x0E            ; Teletype output
+.loop:
+    lodsb                   ; Загружаем следующий байт из DS:SI в AL
+    cmp al, 0
+    je .done
+    int 0x10
+    jmp .loop
+.done:
+    popa
+    ret
+
+disk_error:
+    mov si, msg_error
+    call print_string
+    cli
+    hlt                     ; Остановка процессора при ошибке диска
+
+; --- Данные ---
+BOOT_DRIVE db 0
+msg_loading db 'AetherOS Booting...', 0x0D, 0x0A, 0
+msg_error   db 'Disk Read Error!', 0x0D, 0x0A, 0
+
+; --- Выравнивание до 512 байт и сигнатура MBR ---
+times 510-($-$$) db 0
+dw 0xAA55
