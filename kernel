@@ -1,0 +1,154 @@
+; ==========================================
+; AetherOS Main Kernel & GUI Engine
+; ==========================================
+[BITS 16]
+[ORG 0x0000]
+
+jmp kernel_main
+
+%include "fs.asm"
+%include "shell.asm"
+
+; Цветовая палитра VGA
+COLOR_BG        equ 0x18    ; Темно-синий/серый фон
+COLOR_PANEL     equ 0x13    ; Серые панели окон
+COLOR_ACTIVE    equ 0x2A    ; Ярко-зеленый (курсор селектора)
+COLOR_TEXT      equ 0x0F    ; Белый текст
+COLOR_HEADER    equ 0x01    ; Синий заголовок
+
+CURRENT_FOCUS   db 0        ; Index: 0=Files, 1=Editor, 2=Terminal, 3=Scanner, 4=Settings
+SELECTED_FILE   db 0        ; Индекс выбранного файла в файловом менеджере
+
+kernel_main:
+    ; Настройка сегментов
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+
+    ; Инициализация ФС в памяти
+    call init_filesystem
+
+    ; Переход в VGA Mode 13h (320x200, 256 цветов)
+    mov ax, 0x0013
+    int 0x10
+
+main_loop:
+    call draw_desktop
+    call draw_active_app
+    call handle_input
+    jmp main_loop
+
+; --- Отрисовка Базового Интерфейса ---
+draw_desktop:
+    ; Заливка фона
+    mov ax, 0xA000
+    mov es, ax
+    xor di, di
+    mov al, COLOR_BG
+    mov cx, 320*200
+    rep stosb
+
+    ; Заголовок системы (Top Bar)
+    draw_rect_macro 0, 0, 320, 12, COLOR_HEADER
+    print_text_macro 5, 2, "AetherOS v1.0 | [Left/Right] App | [Up/Down] Select | [Enter] Exec", 15
+
+    ; Нижняя панель состояния (Bottom Status Bar)
+    draw_rect_macro 0, 188, 320, 12, COLOR_PANEL
+    print_text_macro 5, 190, "F1: File System | F2: Text Editor | F3: MicroBASIC | F4: Diagnostic", 0
+    ret
+
+handle_input:
+    mov ah, 0x00
+    int 0x16
+
+    cmp ah, 0x4B ; Left Arrow
+    je .prev_app
+    cmp ah, 0x4D ; Right Arrow
+    je .next_app
+    cmp ah, 0x48 ; Up Arrow
+    je .up_action
+    cmp ah, 0x50 ; Down Arrow
+    je .down_action
+    cmp ah, 0x1C ; Enter
+    je .enter_action
+    
+    ; Обработка текстового ввода для терминала/редактора
+    call process_app_key
+    ret
+
+.prev_app:
+    dec byte [CURRENT_FOCUS]
+    jns .done_app
+    mov byte [CURRENT_FOCUS], 3
+.done_app:
+    ret
+
+.next_app:
+    inc byte [CURRENT_FOCUS]
+    cmp byte [CURRENT_FOCUS], 4
+    jl .done_app2
+    mov byte [CURRENT_FOCUS], 0
+.done_app2:
+    ret
+
+.up_action:
+    cmp byte [SELECTED_FILE], 0
+    jle .ret_u
+    dec byte [SELECTED_FILE]
+.ret_u:
+    ret
+
+.down_action:
+    inc byte [SELECTED_FILE]
+    cmp byte [SELECTED_FILE], 7
+    jl .ret_d
+    mov byte [SELECTED_FILE], 7
+.ret_d:
+    ret
+
+.enter_action:
+    call execute_current_action
+    ret
+
+; --- Вспомогательные функции рисования пикселей и графики ---
+; Renders a simple box: X, Y, W, H, Color
+draw_rectangle:
+    pusha
+    mov ax, 0xA000
+    mov es, ax
+    
+    mov ax, [bp+6]   ; Y
+    mov dx, 320
+    mul dx
+    add ax, [bp+8]   ; X
+    mov di, ax
+
+    mov dx, [bp+4]   ; Height
+.row_loop:
+    mov cx, [bp+2]   ; Width
+    mov al, [bp+10]  ; Color
+    push di
+    rep stosb
+    pop di
+    add di, 320
+    dec dx
+    jnz .row_loop
+
+    popa
+    ret 8
+
+; Печать символов через прерывание BIOS 10h (Teletype mode в режиме графики)
+print_string_gfx:
+    pusha
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+    mov ah, 0x0E
+    mov bh, 0
+    mov bl, COLOR_TEXT
+    int 0x10
+    jmp .loop
+.done:
+    popa
+    ret
