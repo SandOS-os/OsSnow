@@ -1,0 +1,148 @@
+[BITS 16]
+[ORG 0x0000]
+
+jmp kernel_main
+
+; Цветовые константы (Текстовый режим)
+COLOR_BG        equ 0x1F  ; Белый текст на синем фоне
+COLOR_BAR       equ 0x70  ; Черный текст на сером фоне
+COLOR_SELECT    equ 0x2F  ; Белый текст на зеленом фоне (выделение)
+
+cursor_x db 2
+cursor_y db 2
+
+kernel_main:
+    ; Настройка сегментов
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+
+    ; Включаем текстовый режим 80x25 (Mode 3)
+    mov ax, 0x0003
+    int 0x10
+
+    ; Отключаем аппаратный мигающий курсор BIOS
+    mov ah, 0x01
+    mov cx, 0x2000
+    int 0x10
+
+main_loop:
+    call draw_ui
+    call draw_cursor
+    call handle_input
+    jmp main_loop
+
+; --- Отрисовка интерфейса ---
+draw_ui:
+    ; 1. Заливаем весь экран основным фоном
+    mov ax, 0xB800      ; Сегмент текстовой видеопамяти
+    mov es, ax
+    xor di, di
+    mov cx, 80 * 25
+    mov ax, 0x1F20      ; 0x20 = пробел (очистка), 0x1F = цвет
+    rep stosw
+
+    ; 2. Отрисовка верхней панели (Top Bar)
+    xor di, di
+    mov cx, 80
+    mov ax, 0x7020
+    rep stosw
+
+    mov si, msg_topbar
+    mov di, 2           ; Отступ 1 символ
+    mov ah, COLOR_BAR
+    call print_string_vga
+
+    ; 3. Отрисовка нижней панели (Bottom Bar)
+    mov di, 80 * 24 * 2 ; Последняя строка (80 символов * 24 строки * 2 байта на символ)
+    mov cx, 80
+    mov ax, 0x7020
+    rep stosw
+
+    mov si, msg_botbar
+    mov di, (80 * 24 * 2) + 2
+    mov ah, COLOR_BAR
+    call print_string_vga
+
+    ; 4. Рисуем рамку "рабочей области"
+    mov di, (80 * 2 * 2) + 4
+    mov ah, COLOR_BG
+    mov si, msg_welcome
+    call print_string_vga
+
+    ret
+
+; --- Отрисовка курсора/селектора ---
+draw_cursor:
+    ; Вычисляем адрес в видеопамяти: (Y * 80 + X) * 2
+    xor ax, ax
+    mov al, [cursor_y]
+    mov bx, 80
+    mul bx
+    xor bx, bx
+    mov bl, [cursor_x]
+    add ax, bx
+    shl ax, 1           ; Умножаем на 2
+    
+    mov di, ax
+    mov byte [es:di], '>'
+    mov byte [es:di+1], COLOR_SELECT
+    ret
+
+; --- Обработка ввода ---
+handle_input:
+    mov ah, 0x00
+    int 0x16
+
+    cmp ah, 0x48        ; Arrow Up
+    je .move_up
+    cmp ah, 0x50        ; Arrow Down
+    je .move_down
+    cmp ah, 0x4B        ; Arrow Left
+    je .move_left
+    cmp ah, 0x4D        ; Arrow Right
+    je .move_right
+    ret
+
+.move_up:
+    cmp byte [cursor_y], 1
+    jle .done
+    dec byte [cursor_y]
+    jmp .done
+.move_down:
+    cmp byte [cursor_y], 23
+    jge .done
+    inc byte [cursor_y]
+    jmp .done
+.move_left:
+    cmp byte [cursor_x], 0
+    jle .done
+    dec byte [cursor_x]
+    jmp .done
+.move_right:
+    cmp byte [cursor_x], 79
+    jge .done
+    inc byte [cursor_x]
+.done:
+    ret
+
+; --- Вспомогательные функции ---
+; Печать строки напрямую в VRAM. Вход: SI = строка, DI = смещение на экране, AH = цвет
+print_string_vga:
+    pusha
+.loop:
+    lodsb               ; Читаем символ из памяти ядра
+    cmp al, 0
+    je .done
+    mov [es:di], al     ; Пишем символ в VRAM
+    mov [es:di+1], ah   ; Пишем цвет в VRAM
+    add di, 2
+    jmp .loop
+.done:
+    popa
+    ret
+
+; --- Строковые данные ---
+msg_topbar  db ' AetherOS Pro v2.0 | Core Active ', 0
+msg_botbar  db ' [Arrows] Navigate | [Enter] Select | [F1] Help ', 0
+msg_welcome db ' Welcome to the bare-metal environment. System is stable.', 0
